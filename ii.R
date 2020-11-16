@@ -15,8 +15,8 @@ library(doRNG)
 N <- 100 # cross section
 T <- 5 # time series
 phi0 <- 0.95 # AR 1 coefficient
-H <- 100 # number of simulated samples
-S <- 10 # number of Monte Carlo simulations
+H <- 5 # number of simulated samples
+S <- 1 # number of Monte Carlo simulations
 
 # placeholder for indirect inference estimator
 estimates <- rep(NA, S)
@@ -105,19 +105,20 @@ estimate_ii <- function(N, T, H, phi0) {
 set.seed(88)
 
 nCores <- 1   # number of CPUs for parallelization
-registerDoParallel(cores = nCores)
+#registerDoParallel(cores = nCores)
 
 # loop over number of simulations
-results_par <- foreach(s = 1:S) %dorng% {
-  results <- estimate_ii(N, T, H, phi0)
-}
+#results_par <- foreach(s = 1:S) %dorng% {
+#  results <- estimate_ii(N, T, H, phi0)
+#}
 
 # convert results to a matrix
-sim_results <- t(matrix(unlist(results_par), 1, S)) 
+#sim_results <- t(matrix(unlist(results_par), 1, S)) 
 
 # report the result
-print(c(mean(sim_results), sd(sim_results)), digits = 2)
+#print(c(mean(sim_results), sd(sim_results)), digits = 2)
 
+results <- estimate_ii(N, T, H, phi0)
 
 
 

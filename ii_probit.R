@@ -6,6 +6,7 @@ library(doParallel)
 library(doRNG)
 library(plm)
 library(foreign)
+library(speedglm)
 
 #filepath <- "/Users/shuowenchen/desktop/Research/indirect-inference-nonlinear-panel"
 #setwd(filepath)
@@ -16,7 +17,7 @@ lfpdata <- pdata.frame(lfpdata, index = c("id", "year"))
 # VALUES OF THE PARAMETERS;
 N <- length(unique(lfpdata$id))  # number of individuals
 T <- length(unique(lfpdata$year)) # number of time periods
-H <- 1
+H <- 2
 S <- 1
 
 # Regression specification
@@ -127,7 +128,7 @@ estimate_ii <- function(data, index, N, T, H, spec_fe, covariate) {
   
   # estimation procedure for indirect inference estimator
   est <- optimize(objective, c(-1, 1), shocks_sim = shocks_sim, 
-                  alpha_i = al_sim, coef = coef_cali, 
+                  alpha_i = alpha, coef = coef_cali, 
                   reg_form = spec_fe, X = covariate)
   
   # return results
