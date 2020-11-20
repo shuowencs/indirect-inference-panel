@@ -17,12 +17,12 @@ lfpdata <- pdata.frame(lfpdata, index = c("id", "year"))
 # VALUES OF THE PARAMETERS;
 N <- length(unique(lfpdata$id))  # number of individuals
 T <- length(unique(lfpdata$year)) # number of time periods
-H <- 2
+H <- 5
 S <- 1
 
 # Regression specification
-spec_fe <- lfp ~ kids0_2 | id
-spec <- lfp ~ kids0_2 + factor(id)
+spec_fe <- lfp ~ age | id
+spec <- lfp ~ age + factor(id)
 
 # Check number of missing LFP values
 nomissing <- !is.na(lfpdata$lfp)
@@ -33,7 +33,6 @@ fit <- feglm(spec_fe, data = lfpdata, family = binomial(link = "probit"))
 coef_fe <- coef(fit)
 # beta*X_{i,t}+\alpha_{i} and stack up by time series dimension
 index <- matrix(predict(fit), nrow = T, byrow = FALSE) 
-alf <- matrix(predict(fit) - coef_fe*lfpdata$kids0_2, nrow = T, byrow = FALSE)
 
 ################# Create a calibrated panel dataset
 cali_dat <- function(data, T, N, index) {
@@ -65,7 +64,7 @@ sim_dat <- function(phi, shocks, unitfe, covariate) {
   for (t in 1:T) lfp_s[t, ] <- (phi*temp[t, ] + unitfe > shocks[t, ])
   lfp_s <- matrix(lfp_s, ncol = 1, byrow = FALSE)
   # All other covariates are taken from the original data
-  data_s <- data.frame(lfp = lfp_s, kids0_2 = covariate, 
+  data_s <- data.frame(lfp = lfp_s, age = covariate, 
                        id = kronecker(sample(N), rep(1, T)), 
                        year = kronecker(rep(1, N), c(1:T)))
   # eliminate obs with all 0's or all 1's
@@ -117,18 +116,20 @@ estimate_ii <- function(data, index, N, T, H, spec_fe, covariate) {
   # Try different ways of simulating the individual fixed effect
   # 1. From normal dist.
   alpha_sim <- matrix(rnorm(N*H, 0, 1/4), nrow = N, ncol = H) 
+  #alpha_sim2 <- matrix(rexp(N*H), nrow = N, ncol = H) 
   # 2. Use the true DGP's fixed effect
-  alf <- matrix(predict(fit) - coef_fe*lfpdata$kids0_2, nrow = T, byrow = FALSE)
-  alpha <- matrix(rep(alf[1, ], H), ncol = H)
+  #alf <- matrix(predict(fit) - coef_fe*lfpdata$age, nrow = T, byrow = FALSE)
+  #alpha <- matrix(rep(alf[1, ], H), ncol = H)
   # 3. Use the sd of estimated individual fe in the synthetic data
   # Note: this doesn't work well because individual fe is biased estimate
-  f <- speedglm(lfp ~ kids0_2 +factor(id), dat_syn, family = binomial(link = "probit"))
-  sd_alpha <- sd(coef(f)[-c(1:2)])
-  al_sim <- matrix(rnorm(N*H, 0, sd_alpha), nrow = N, ncol = H)
+  #f <- speedglm(lfp ~ age +factor(id), dat_syn, family = binomial(link = "probit"))
+  #sd_alpha <- sd(coef(f)[-c(1:2)])
+  #al_sim <- matrix(rnorm(N*H, 0, sd_alpha), nrow = N, ncol = H)
   
   # estimation procedure for indirect inference estimator
+  # one-dimensional optimization
   est <- optimize(objective, c(-1, 1), shocks_sim = shocks_sim, 
-                  alpha_i = alpha, coef = coef_cali, 
+                  alpha_i = alpha_sim, coef = coef_cali, 
                   reg_form = spec_fe, X = covariate)
   
   # return results
@@ -142,7 +143,7 @@ nCores <- 1   # number of CPUs for parallelization
 registerDoParallel(cores = nCores)
 
 # loop over number of simulations
-results <- estimate_ii(lfpdata, index, N, T, H, spec_fe, lfpdata$kids0_2)
+results <- estimate_ii(lfpdata, index, N, T, H, spec_fe, lfpdata$age)
 #results_par <- foreach(s = 1:S) %dorng% {
 #  results <- estimate_ii(lfpdata, index, N, T, H, spec_fe, lfpdata$kids0_2)
 #}
