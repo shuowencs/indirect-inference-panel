@@ -1,9 +1,12 @@
-# 11/20/2020 Shuowen Chen
+# 11/27/2020 Shuowen Chen
 # Code for indirect inference bias correction for nonlinear panel
 
 library(optimr)
 library(alpaca)
-# goal: rewrite the code tomorrow to allow for arbitrary number of coefficients for estimation
+library(plm)
+library(foreign)
+library(doParallel)
+library(doRNG)
 
 lfpdata <- read.dta("LFPmovers.dta")
 lfpdata <- pdata.frame(lfpdata, index = c("id", "year"))
@@ -14,8 +17,7 @@ H <- 10
 S <- 1
 
 # Regression specification
-spec_fe <- lfp ~ kids0_2 + age | id
-spec2 <- lfp ~ kids0_2 + age + factor(id)
+spec_fe <- lfp ~ kids0_2 + age + kids3_5 | id
 
 # Check number of missing LFP values
 nomissing <- !is.na(lfpdata$lfp)
@@ -108,8 +110,7 @@ objective_multi <- function(phi, shocks_sim, alpha_i, coef, reg_form, X) {
 # spec_2:    specification for speedglm (to get sd of estimated individual fixed effects)
 # covariate: RHS exogenous covariate
 # initials:  starting points for the optimization routine, should be a matrix
-estimate_ii_multi <- function(data, index, N, T, H, spec_fe, spec_2, covariate,
-                              initials) {
+estimate_ii_multi <- function(data, index, N, T, H, spec_fe, covariate, initials) {
   # generate a calibrated panel data
   dat_syn <- cali_dat(data, T, N, index)
   
@@ -129,8 +130,9 @@ estimate_ii_multi <- function(data, index, N, T, H, spec_fe, spec_2, covariate,
   #alpha <- matrix(rep(alf[1, ], H), ncol = H)
   # 3. Use the sd of estimated individual fe in the synthetic data
   # Note: this doesn't work well because individual fe is biased estimate
-  f <- speedglm(spec_2, dat_syn, family = binomial(link = "probit"))
-  sd_alpha <- sd(coef(f)[-c(1:(dim_par + 1))])
+  #f <- speedglm(spec_2, dat_syn, family = binomial(link = "probit"))
+  #sd_alpha <- sd(coef(f)[-c(1:(dim_par + 1))])
+  sd_alpha <- sd(getFEs(fit_cali)$id)
   al_sim <- matrix(rnorm(N*H, 0, sd_alpha), nrow = N, ncol = H)
   
   # estimation procedure for indirect inference estimator
@@ -143,14 +145,18 @@ estimate_ii_multi <- function(data, index, N, T, H, spec_fe, spec_2, covariate,
   } else {
     # use multiple starting points
     # results are sensitive to the starting points and number of H
-    est <- multistart(initials, objective_multi, method = "L-BFGS-B", 
-                      lower = rep(-1, dim_par), upper = rep(1, dim_par), 
-                      shocks_sim = shocks_sim, alpha_i = al_sim, 
-                      coef = coef_cali, reg_form = spec_fe, X = covariate)
+    est <- optim(initials, objective_multi, method = "BFGS",
+                 shocks_sim = shocks_sim, alpha_i = al_sim,
+                 coef = coef_cali, reg_form = spec_fe, X = covariate)
+    #est <- multistart(initials, objective_multi, method = "L-BFGS-B", 
+    #                  lower = rep(-1, dim_par), upper = rep(1, dim_par), 
+    #                  shocks_sim = shocks_sim, alpha_i = al_sim, 
+    #                  coef = coef_cali, reg_form = spec_fe, X = covariate)
     # return the estimates that yield the small function value
-    ind <- which.min(est$value)
-    colnames(est) <- colnames(covariate)
-    results <- est[ind, c(1:dim_par)]
+    #ind <- which.min(est$value)
+    #colnames(est) <- colnames(covariate)
+    #results <- est[ind, c(1:dim_par)]
+    results <- est$par
   }
   return(results)
 }
@@ -161,8 +167,15 @@ set.seed(88) # for reproduction
 #pm <- as.matrix(rbind(c(0, 0, 0), c(-0.7, 0.2, -0.3), c(0.5, 1, -0.25), 
 #                      c(-0.7, 0.3, 0.4), c(-0.5, -1, -0.3)))
 
-pm <- as.matrix(rbind(c(0, 0), c(-0.5, -0.2), c(0.5, -0.25), c(-0.6, 0.2)))
+nCores <- 1   # number of CPUs for parallelization
+registerDoParallel(cores = nCores)
 
-results <- estimate_ii_multi(lfpdata, index, N, T, H, spec_fe, spec2, 
-                             lfpdata[, c("kids0_2", "age")], pm)
+#pm <- as.matrix(rbind(c(0, 0), c(-0.5, -0.2), c(0.5, -0.25), c(-0.6, 0.2)))
+pm <- c(0, 0, 0)
+
+# loop over number of simulations
+results_par <- foreach(s = 1:S) %dorng% {
+  results <- estimate_ii_multi(lfpdata, index, N, T, H, spec_fe,
+                               lfpdata[, c("kids0_2", "age", "kids3_5")], pm)
+}
 
