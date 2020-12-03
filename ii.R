@@ -18,9 +18,6 @@ phi0 <- 0.95 # AR 1 coefficient
 H <- 5 # number of simulated samples
 S <- 1 # number of Monte Carlo simulations
 
-# placeholder for indirect inference estimator
-estimates <- rep(NA, S)
-
 ########### 2.  Define Functions #############
 # Simulated panel AR(1) with only individual fixed effects
 # y_it = alpha_i + phi*y_it-1 + e_it
