@@ -45,6 +45,8 @@ cali_dat <- function(data, T, N, index) {
   D <- matrix(data_s$id, ncol = 1)
   td <- kronecker(tapply(lfp_s, D, sum),  matrix(1, T, 1)) 
   insample <- ((td > 0) & (td < T))
+  # sort the data by id
+  data_s <- data_s[order(data_s$id), ]
   data_s <- data_s[insample, ]
   return(data_s)
 }
@@ -56,8 +58,6 @@ sim_dat_multi <- function(phi, shocks, unitfe, covariate) {
   
   lfp_s <- matrix(0, nrow = T, ncol = N)
   # Interpretation: beta*X_{i,t}+\alpha_{i} > rnorm(N)
-  #mat <- as.matrix(covariate)
-  #temp <- matrix(phi*mat[, 1] + coef_true[2]*mat[, 2], nrow = T, ncol = N)
   temp <- matrix(as.matrix(covariate) %*% matrix(phi), nrow = T, ncol = N)
   for (t in 1:T) lfp_s[t, ] <- (temp[t, ] + unitfe > shocks[t, ])
   lfp_s <- matrix(lfp_s, ncol = 1, byrow = FALSE)
@@ -65,13 +65,12 @@ sim_dat_multi <- function(phi, shocks, unitfe, covariate) {
   data_s <- data.frame(lfp = lfp_s, covariate,
                        id = kronecker(c(1:N), rep(1, T)), 
                        year = kronecker(rep(1, N), c(1:T)))
-  #data_s <- data.frame(lfp = lfp_s, covariate,
-  #                     id = kronecker(sample(N), rep(1, T)), 
-  #                     year = kronecker(rep(1, N), c(1:T)))
   # eliminate obs with all 0's or all 1's
   D <- matrix(data_s$id, ncol = 1)
   td <- kronecker(tapply(lfp_s, D, sum),  matrix(1, T, 1)) 
   insample <- ((td > 0) & (td < T))
+  # sort the data by id
+  data_s <- data_s[order(data_s$id), ]
   data_s <- data_s[insample, ]
   return(data_s)
 }
@@ -124,17 +123,15 @@ estimate_ii_multi <- function(data, index, N, T, H, spec_fe, covariate, initials
   shocks_sim <- array(rnorm(N*T*H, 0, 1), c(T, N, H))
   # Try different ways of simulating the individual fixed effect
   # 1. From normal dist.
-  #alpha_sim <- matrix(rnorm(N*H, 0, 1), nrow = N, ncol = H) 
-  # 2. Use the true DGP's fixed effect
-  #alf <- matrix(predict(fit) - coef_fe*lfpdata$kids0_2, nrow = T, byrow = FALSE)
-  #alpha <- matrix(rep(alf[1, ], H), ncol = H)
+  #al_sim <- matrix(rnorm(N*H, 0, 1), nrow = N, ncol = H) 
+  # 2. Use the fixed effect estimate from fit_cali
+  alf <- getFEs(fit_cali)$id
+  al_sim <- matrix(rep(alf, H), nrow = N, ncol = H)
   # 3. Use the sd of estimated individual fe in the synthetic data
-  # Note: this doesn't work well because individual fe is biased estimate
-  #f <- speedglm(spec_2, dat_syn, family = binomial(link = "probit"))
-  #sd_alpha <- sd(coef(f)[-c(1:(dim_par + 1))])
-  sd_alpha <- sd(getFEs(fit_cali)$id)
-  al_sim <- matrix(rnorm(N*H, 0, sd_alpha), nrow = N, ncol = H)
-  
+  #sd_alpha <- sd(getFEs(fit_cali)$id)
+  #al_sim <- matrix(rnorm(N*H, 0, sd_alpha), nrow = N, ncol = H)
+  # 4. From logistic distribution
+  #al_sim <- matrix(rlogis(N*H), nrow = N, ncol = H)
   # estimation procedure for indirect inference estimator
   if (dim_par == 1) {
     # one-dimensional optimization
@@ -173,9 +170,11 @@ registerDoParallel(cores = nCores)
 #pm <- as.matrix(rbind(c(0, 0), c(-0.5, -0.2), c(0.5, -0.25), c(-0.6, 0.2)))
 pm <- c(0, 0, 0)
 
+results <- estimate_ii_multi(lfpdata, index, N, T, H, spec_fe,
+                             lfpdata[, c("kids0_2", "age", "kids3_5")], pm)
 # loop over number of simulations
-results_par <- foreach(s = 1:S) %dorng% {
-  results <- estimate_ii_multi(lfpdata, index, N, T, H, spec_fe,
-                               lfpdata[, c("kids0_2", "age", "kids3_5")], pm)
-}
+#results_par <- foreach(s = 1:S) %dorng% {
+#  results <- estimate_ii_multi(lfpdata, index, N, T, H, spec_fe,
+#                               lfpdata[, c("kids0_2", "age", "kids3_5")], pm)
+#}
 
