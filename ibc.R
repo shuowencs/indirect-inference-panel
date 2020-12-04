@@ -11,8 +11,6 @@ library(doRNG)
 lfpdata <- read.dta("LFPmovers.dta")
 lfpdata <- pdata.frame(lfpdata, index = c("id", "year"))
 
-N <- length(unique(lfpdata$id))  # number of individuals
-T <- length(unique(lfpdata$year)) # number of time periods
 H <- 10
 S <- 1
 
@@ -28,10 +26,12 @@ fit <- feglm(spec_fe, data = lfpdata, family = binomial(link = "probit"))
 # true coefficient of the model
 coef_fe <- coef(fit) 
 # beta*X_{i,t}+\alpha_{i} and stack up by time series dimension
-index <- matrix(predict(fit), nrow = T, byrow = FALSE) 
+index <- matrix(predict(fit), nrow = length(unique(lfpdata$year)), byrow = FALSE) 
 
 ################# Create a calibrated panel dataset
-cali_dat <- function(data, T, N, index) {
+cali_dat <- function(data, index) {
+  N <- length(unique(data$id))  # number of individuals
+  T <- length(unique(data$year)) # number of time periods
   lfp_s <- matrix(0, nrow = T, ncol = N)
   # Interpretation: beta*X_{i,t}+\alpha_{i} > rnorm(N)
   for (t in 1:T) lfp_s[t, ] <- (index[t, ] > rnorm(N))
@@ -43,7 +43,7 @@ cali_dat <- function(data, T, N, index) {
                        year = kronecker(rep(1, N), c(1:T)))
   # eliminate obs with all 0's or all 1's
   D <- matrix(data_s$id, ncol = 1)
-  td <- kronecker(tapply(lfp_s, D, sum),  matrix(1, T, 1)) 
+  td <- kronecker(tapply(lfp_s, D, sum), matrix(1, T, 1)) 
   insample <- ((td > 0) & (td < T))
   # sort the data by id
   data_s <- data_s[order(data_s$id), ]
@@ -102,22 +102,23 @@ objective_multi <- function(phi, shocks_sim, alpha_i, coef, reg_form, X) {
 # inputs:
 # data:      true dataset at hand
 # index:     fitted value for constructing the data for simulation
-# N:         number of cross section units
-# T:         number of time series 
 # H:         number of simulation paths
 # spec_fe:   regression specification for feglm
 # spec_2:    specification for speedglm (to get sd of estimated individual fixed effects)
-# covariate: RHS exogenous covariate
+# xnames:    names of RHS exogenous covariate
 # initials:  starting points for the optimization routine, should be a matrix
-estimate_ii_multi <- function(data, index, N, T, H, spec_fe, covariate, initials) {
+estimate_ii_multi <- function(data, index, N, T, H, spec_fe, xnames, initials) {
   # generate a calibrated panel data
-  dat_syn <- cali_dat(data, T, N, index)
+  dat_syn <- cali_dat(data, index)
   
   fit_cali <- feglm(spec_fe, data = dat_syn, family = binomial(link = "probit"))
   # coefficients from the auxiliary model
   coef_cali <- coef(fit_cali)
   # number of pars of interest
   dim_par <- length(coef_cali)
+  
+  N <- length(unique(dat_syn$id))  # number of individuals
+  T <- length(unique(dat_syn$year)) # number of time periods
   
   # shocks and unit fe for sim data in indirect inference
   shocks_sim <- array(rnorm(N*T*H, 0, 1), c(T, N, H))
@@ -137,14 +138,15 @@ estimate_ii_multi <- function(data, index, N, T, H, spec_fe, covariate, initials
     # one-dimensional optimization
     est <- optimize(objective_multi, c(-1, 1), shocks_sim = shocks_sim, 
                     alpha_i = al_sim, coef = coef_cali, reg_form = spec_fe, 
-                    X = covariate)
+                    X = dat_syn[, ..xnames])
     results <- est$minimum
   } else {
     # use multiple starting points
     # results are sensitive to the starting points and number of H
     est <- optim(initials, objective_multi, method = "BFGS",
                  shocks_sim = shocks_sim, alpha_i = al_sim,
-                 coef = coef_cali, reg_form = spec_fe, X = covariate)
+                 coef = coef_cali, reg_form = spec_fe, 
+                 X = dat_syn[, ..xnames])
     #est <- multistart(initials, objective_multi, method = "L-BFGS-B", 
     #                  lower = rep(-1, dim_par), upper = rep(1, dim_par), 
     #                  shocks_sim = shocks_sim, alpha_i = al_sim, 
@@ -171,7 +173,7 @@ registerDoParallel(cores = nCores)
 pm <- c(0, 0, 0)
 
 results <- estimate_ii_multi(lfpdata, index, N, T, H, spec_fe,
-                             lfpdata[, c("kids0_2", "age", "kids3_5")], pm)
+                             c("kids0_2", "age", "kids3_5"), pm)
 # loop over number of simulations
 #results_par <- foreach(s = 1:S) %dorng% {
 #  results <- estimate_ii_multi(lfpdata, index, N, T, H, spec_fe,
