@@ -1,4 +1,4 @@
-# 11/27/2020 Shuowen Chen
+# 12/7/2020 Shuowen Chen
 # Code for indirect inference bias correction for nonlinear panel
 
 library(optimr)
@@ -11,8 +11,8 @@ library(doRNG)
 lfpdata <- read.dta("LFPmovers.dta")
 lfpdata <- pdata.frame(lfpdata, index = c("id", "year"))
 
-H <- 10
-S <- 1
+H <- 10 # number of simulation path
+S <- 4 # number of simulations
 
 # Regression specification
 spec_fe <- lfp ~ kids0_2 + age + kids3_5 | id
@@ -69,8 +69,7 @@ sim_dat_multi <- function(phi, shocks, unitfe, covariate) {
   D <- matrix(data_s$id, ncol = 1)
   td <- kronecker(tapply(lfp_s, D, sum),  matrix(1, T, 1)) 
   insample <- ((td > 0) & (td < T))
-  # sort the data by id
-  data_s <- data_s[order(data_s$id), ]
+  data_s <- data_s[order(data_s$id), ] # sort data by id
   data_s <- data_s[insample, ]
   return(data_s)
 }
@@ -85,6 +84,7 @@ sim_dat_multi <- function(phi, shocks, unitfe, covariate) {
 #  objective function for estimation
 objective_multi <- function(phi, shocks_sim, alpha_i, coef, reg_form, X) {
   # compute simulated beta, returns |beta-beta_sim|
+  print(phi)
   H <- dim(shocks_sim)[3]
   coef_sim <- rep(0, length(phi))
   # loop over sample paths
@@ -107,7 +107,7 @@ objective_multi <- function(phi, shocks_sim, alpha_i, coef, reg_form, X) {
 # spec_2:    specification for speedglm (to get sd of estimated individual fixed effects)
 # xnames:    names of RHS exogenous covariate
 # initials:  starting points for the optimization routine, should be a matrix
-estimate_ii_multi <- function(data, index, N, T, H, spec_fe, xnames, initials) {
+estimate_ii_multi <- function(data, index, H, spec_fe, xnames, initials) {
   # generate a calibrated panel data
   dat_syn <- cali_dat(data, index)
   
@@ -126,7 +126,7 @@ estimate_ii_multi <- function(data, index, N, T, H, spec_fe, xnames, initials) {
   # 1. From normal dist.
   #al_sim <- matrix(rnorm(N*H, 0, 1), nrow = N, ncol = H) 
   # 2. Use the fixed effect estimate from fit_cali
-  alf <- getFEs(fit_cali)$id
+  alf <- getFEs(fit_cali)$id 
   al_sim <- matrix(rep(alf, H), nrow = N, ncol = H)
   # 3. Use the sd of estimated individual fe in the synthetic data
   #sd_alpha <- sd(getFEs(fit_cali)$id)
@@ -141,42 +141,31 @@ estimate_ii_multi <- function(data, index, N, T, H, spec_fe, xnames, initials) {
                     X = dat_syn[, ..xnames])
     results <- est$minimum
   } else {
-    # use multiple starting points
-    # results are sensitive to the starting points and number of H
-    est <- optim(initials, objective_multi, method = "BFGS",
+    # results are sensitive to number of H
+    est <- optim(initials, objective_multi, method = "Nelder-Mead",
                  shocks_sim = shocks_sim, alpha_i = al_sim,
                  coef = coef_cali, reg_form = spec_fe, 
                  X = dat_syn[, ..xnames])
-    #est <- multistart(initials, objective_multi, method = "L-BFGS-B", 
-    #                  lower = rep(-1, dim_par), upper = rep(1, dim_par), 
-    #                  shocks_sim = shocks_sim, alpha_i = al_sim, 
-    #                  coef = coef_cali, reg_form = spec_fe, X = covariate)
-    # return the estimates that yield the small function value
-    #ind <- which.min(est$value)
-    #colnames(est) <- colnames(covariate)
-    #results <- est[ind, c(1:dim_par)]
     results <- est$par
   }
-  return(results)
+  return(list(ii = results, auxiliary = coef_cali))
 }
 
 
 ########### 3. Simulation #############
 set.seed(88) # for reproduction
-#pm <- as.matrix(rbind(c(0, 0, 0), c(-0.7, 0.2, -0.3), c(0.5, 1, -0.25), 
-#                      c(-0.7, 0.3, 0.4), c(-0.5, -1, -0.3)))
 
 nCores <- 1   # number of CPUs for parallelization
 registerDoParallel(cores = nCores)
 
-#pm <- as.matrix(rbind(c(0, 0), c(-0.5, -0.2), c(0.5, -0.25), c(-0.6, 0.2)))
-pm <- c(0, 0, 0)
+# initial values
+pm <- coef_fe
 
-results <- estimate_ii_multi(lfpdata, index, N, T, H, spec_fe,
-                             c("kids0_2", "age", "kids3_5"), pm)
-# loop over number of simulations
-#results_par <- foreach(s = 1:S) %dorng% {
-#  results <- estimate_ii_multi(lfpdata, index, N, T, H, spec_fe,
-#                               lfpdata[, c("kids0_2", "age", "kids3_5")], pm)
-#}
+coef <- matrix(0, nrow = S, ncol = 3)
+for (s in 1:S) {
+  results <- estimate_ii_multi(lfpdata, index, H, spec_fe,
+                               c("kids0_2", "age", "kids3_5"), pm)
+  coef[s, ] <- results$ii
+}
+
 
