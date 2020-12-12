@@ -161,11 +161,9 @@ results_par <- foreach(s = 1:S) %dorng% {
 }
 
 # convert results to a matrix
-#ii_matrix <- sapply(results_par, function(x) return(x$ii))
-#rowMeans(ii_matrix)
-#apply(ii_matrix, 1, sd)
-
-save.image(file = "extramoments.RData")
+ii_matrix <- sapply(results_par, function(x) return(x$ii))
+rowMeans(ii_matrix)
+apply(ii_matrix, 1, sd)
 
 
 
