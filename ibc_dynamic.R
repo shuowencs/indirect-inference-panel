@@ -13,10 +13,10 @@ lfpdata <- read.dta("LFPmovers.dta")
 lfpdata <- pdata.frame(lfpdata, index = c("id", "year"))
 
 H <- 10 # number of simulation path
-S <- 10 # number of simulations
+S <- 4 # number of simulations
 
 # Regression specification
-spec_s <- lfp ~ kids0_2 + kids3_5 + kids6_17 + loghusbandincome + age + age2 | id
+spec_s <- lfp ~ kids0_2 + kids3_5 + age | id
 spec_d <- lfp ~ laglfp + kids0_2 + kids3_5 + kids6_17 + loghusbandincome + age + age2 | id
 
 # Estimate fitted value from the true dataset to create calibrated dataset
@@ -67,8 +67,13 @@ cali_dat <- function(data, fit, model = c("static", "dynamic")) {
   }
   # eliminate obs with all 0's or all 1's
   D <- matrix(data_s$id, ncol = 1)
-  td <- kronecker(tapply(lfp_s, D, sum), matrix(1, T, 1)) 
-  insample <- ((td > 0) & (td < T))
+  td <- kronecker(tapply(lfp_s, D, sum), matrix(1, T, 1))
+  if (model == "static") {
+    insample <- ((td > 0) & (td < T))
+  } else {
+    td2 <- kronecker(tapply(laglfp_s, D, sum), matrix(1, T, 1))
+    insample <- ((td > 0) & (td < T) & (td2 > 0) & (td2 < T))
+  }
   # sort the data by id
   data_s <- data_s[order(data_s$id), ]
   data_s <- data_s[insample, ]
@@ -76,8 +81,8 @@ cali_dat <- function(data, fit, model = c("static", "dynamic")) {
 }
 
 # A function to simulate data in indirect inference
-sim_dat_multi <- function(phi, shocks, unitfe, covariate,
-                          model = c("static", "dynamic")) {
+sim_dat <- function(phi, shocks, unitfe, covariate,
+                    model = c("static", "dynamic")) {
   model <- match.arg(model)
   T <- dim(shocks)[1] # time series dimension
   N <- dim(shocks)[2] # cross section dimension
@@ -116,7 +121,12 @@ sim_dat_multi <- function(phi, shocks, unitfe, covariate,
   # eliminate obs with all 0's or all 1's
   D <- matrix(data_s$id, ncol = 1)
   td <- kronecker(tapply(lfp_s, D, sum),  matrix(1, T, 1)) 
-  insample <- ((td > 0) & (td < T))
+  if (model == "static") {
+    insample <- ((td > 0) & (td < T))
+  } else {
+    td2 <- kronecker(tapply(laglfp_s, D, sum), matrix(1, T, 1))
+    insample <- ((td > 0) & (td < T) & (td2 > 0) & (td2 < T))
+  }
   data_s <- data_s[order(data_s$id), ] # sort data by id
   data_s <- data_s[insample, ]
   return(data_s)
@@ -130,8 +140,8 @@ sim_dat_multi <- function(phi, shocks, unitfe, covariate,
 #  X:        exogenous covariate
 # output:
 #  objective function for estimation
-objective_multi <- function(phi, shocks_sim, alpha_i, coef, reg_form, X,
-                            model = c("static", "dynamic")) {
+objective <- function(phi, shocks_sim, alpha_i, coef, reg_form, X,
+                      model = c("static", "dynamic")) {
   model <- match.arg(model)
   # compute simulated beta, returns |beta-beta_sim|
   print(phi)
@@ -139,25 +149,35 @@ objective_multi <- function(phi, shocks_sim, alpha_i, coef, reg_form, X,
   coef_sim <- rep(0, length(phi))
   # loop over sample paths
   for (h in 1:H) {
-    dats <- sim_dat_multi(phi, shocks_sim[, , h], alpha_i[, h], X, model)
-    fit_sim <- feglm(reg_form, dats, family = binomial(link = "probit"))
-    coef_sim <- coef_sim + coef(fit_sim)/H
+    dats <- sim_dat(phi, shocks_sim[, , h], alpha_i[, h], X, model)
+    fit_sim <- try(feglm(reg_form, dats, family = binomial(link = "probit")))
+    coef_sim <- tryCatch(
+      {coef_sim + coef(fit_sim)/H},
+      error = function(e) coef_sim
+    )
+    #fit_sim <- feglm(reg_form, dats, family = binomial(link = "probit"))
+    #coef_sim <- coef_sim + coef(fit_sim)/H
   }
-  # Use identity weighting matrix
-  return( sum( (coef - coef_sim)^2 ) )
+    # Use identity weighting matrix
+    return(sum((coef - coef_sim)^2))
 }
 
 
 # a function to obtain indirect inference estimator for one simulation
-# inputs:
+# INPUTS:
 # data:      true dataset at hand
-# index:     fitted value for constructing the data for simulation
+# fit0:      fitted model for constructing the data for simulation
 # H:         number of simulation paths
 # spec_fe:   regression specification for feglm
 # xnames:    names of RHS exogenous covariate
-# initials:  starting points for the optimization routine, should be a matrix
-estimate_ii_multi <- function(data, fit0, H, spec_fe, xnames, initials,
-                              model = c("static", "dynamic")) {
+# initials:  starting points for the optimization routine
+# model:     whether the model has a lagged dependent variable
+# OUTPUTS:
+# ii:        indirect inference estimator
+# auxiliary: FE estimator without bias correction
+
+estimate_ii <- function(data, fit0, H, spec_fe, xnames, initials,
+                        model = c("static", "dynamic")) {
   model <- match.arg(model)
   # generate a calibrated panel data
   dat_syn <- cali_dat(data, fit0, model)
@@ -183,12 +203,21 @@ estimate_ii_multi <- function(data, fit0, H, spec_fe, xnames, initials,
   #al_sim <- matrix(rnorm(N*H, 0, sd_alpha), nrow = N, ncol = H)
   # 4. From logistic distribution
   #al_sim <- matrix(rlogis(N*H), nrow = N, ncol = H)
+  
   # estimation procedure for indirect inference estimator
-  est <- optim(initials, objective_multi, method = "Nelder-Mead",
-               shocks_sim = shocks_sim, alpha_i = al_sim,
-               coef = coef_aux, reg_form = spec_fe, model = model,
-               X = dat_syn[, ..xnames])
-  results <- est$par
+  if (dim_par == 1) {
+    # one-dimensional optimization
+    est <- optimize(objective, c(-1, 1), shocks_sim = shocks_sim, 
+                    alpha_i = al_sim, coef = coef_aux, reg_form = spec_fe, 
+                    X = dat_syn[, ..xnames])
+    results <- est$minimum
+  } else {
+    est <- optim(initials, objective, method = "Nelder-Mead",
+                 shocks_sim = shocks_sim, alpha_i = al_sim,
+                 coef = coef_aux, reg_form = spec_fe, model = model,
+                 X = dat_syn[, ..xnames]) 
+    results <- est$par
+  }
   return(list(ii = results, auxiliary = coef_aux))
 }
 
@@ -197,24 +226,42 @@ set.seed(88, kind = "L'Ecuyer-CMRG") # for reproduction
 nCores <- 1 # number of CPUs for parallelization
 registerDoParallel(cores = nCores)
 
-#results_static <- estimate_ii_multi(lfpdata, fit_s, H, spec_s, 
-#                                    c("kids0_2", "kids3_5", "kids6_17", 
-#                                      "loghusbandincome", "age", "age2"), coef0_s,
-#                                    model = "static")
-
-results_dynamic <- estimate_ii_multi(lfpdata, fit_d, H, spec_d, 
-                                     c("laglfp", "kids0_2", "kids3_5", "kids6_17", 
-                                       "loghusbandincome", "age", "age2"), coef0_d,
-                                     model = "dynamic")
 #results_par <- foreach(s = 1:S) %dorng% {
-#  results <- estimate_ii_multi(lfpdata, index, H, spec_fe,
-#                               c("kids0_2", "age", "kids3_5"), pm)
+#   results_static <- estimate_ii(lfpdata, fit_s, H, spec_s, 
+#                                        c("kids0_2", "kids3_5", "age"), coef0_s,
+#                                        model = "static")
 #}
 
+#set.seed(88, kind = "L'Ecuyer-CMRG") 
+
+results_par <- foreach(s = 1:S) %dorng% {
+  results_dynamic <- estimate_ii(lfpdata, fit_d, H, spec_d, 
+                               c("laglfp", "kids0_2", "kids3_5", "kids6_17", 
+                                 "loghusbandincome", "age", "age2"), coef0_d,
+                               model = "dynamic")
+}
+
+
+########### 4. Table Results #############
 # convert results to a matrix
-#ii_matrix <- sapply(results_par, function(x) return(x$ii))
-#rowMeans(ii_matrix)
-#apply(ii_matrix, 1, sd)
+ii_matrix <- sapply(results_par, function(x) return(x$ii))
+fe_matrix <- sapply(results_par, function(x) return(x$auxiliary))
+rowMeans(ii_matrix)
+apply(ii_matrix, 1, sd)
+
+# a function that produces the diagnostic statistics
+table_simulation <- function(est, est0) {
+  tab <- matrix(0, nrow = 3, ncol = length(est0))
+  rownames(tab) <- c('Bias', 'Std Dev', 'RMSE')
+  colnames(tab) <- names(est0)
+  tab[1, ] <- 100*(apply(est, 1, mean)/est0 - 1)
+  tab[2, ] <- 100*(apply(est/est0, 1, sd))
+  tab[3, ] <- 100*sqrt((apply((est/est0 - 1)^2, 1, mean)))
+  return(tab)
+}
+
+table_ii <- table_simulation(ii_matrix, coef0_d)
+table_fe <- table_simulation(fe_matrix, coef0_d)
 
 
 
